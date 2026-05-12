@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ai-chat-box
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.17.1
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        value: deepseek-v4-pro
+      - key: SYSTEM_PROMPT
+        value: 你是一个简洁、友好的中文助手。
+      - key: DEFAULT_WEATHER_CITY
+        value: 广州
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SEARCH_TOOL_ENABLED
+        value: true

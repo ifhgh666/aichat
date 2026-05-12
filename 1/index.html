@@ -1,9 +1,11 @@
+﻿//前端
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>聊天机器人</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css" />
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -24,9 +26,43 @@
 
     .chat-header {
       padding: 16px;
-      font-size: 18px;
       font-weight: bold;
       border-bottom: 1px solid #eee;
+    }
+
+    .chat-title {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+
+    .chat-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: normal;
+      color: #4b5563;
+    }
+
+    .status-pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #f3f4f6;
+    }
+
+    .status-pill.ok {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .status-pill.loading {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+
+    .status-pill.error {
+      background: #fee2e2;
+      color: #991b1b;
     }
 
     .chat-box {
@@ -54,6 +90,70 @@
     .bot {
       background: #e5e7eb;
       margin-right: auto;
+    }
+
+    .bot h1,
+    .bot h2,
+    .bot h3 {
+      margin: 8px 0;
+      line-height: 1.3;
+    }
+
+    .bot p {
+      margin: 6px 0;
+    }
+
+    .bot ul,
+    .bot ol {
+      margin: 6px 0;
+      padding-left: 20px;
+    }
+
+    .bot blockquote {
+      margin: 8px 0;
+      padding-left: 10px;
+      border-left: 3px solid #9ca3af;
+      color: #4b5563;
+    }
+
+    .bot a {
+      color: #2563eb;
+    }
+
+    .bot code {
+      padding: 2px 4px;
+      border-radius: 4px;
+      background: #f3f4f6;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 0.92em;
+    }
+
+    .bot pre {
+      position: relative;
+      margin: 8px 0;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      background: #f8fafc;
+    }
+
+    .bot pre code {
+      padding: 0;
+      background: transparent;
+      font-size: 13px;
+    }
+
+    .copy-code-button {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      padding: 4px 8px;
+      border: none;
+      border-radius: 6px;
+      background: #2563eb;
+      color: white;
+      font-size: 12px;
+      cursor: pointer;
     }
 
     .chat-input {
@@ -84,30 +184,159 @@
       background: #93c5fd;
       cursor: not-allowed;
     }
+
+    .chat-input .stop-button {
+      background: #dc2626;
+    }
+
+    .chat-input .stop-button:disabled {
+      background: #fecaca;
+    }
+
+    .chat-actions {
+      display: flex;
+      justify-content: flex-end;
+      border-top: 1px solid #eee;
+      padding: 8px 12px;
+      background: #fff;
+    }
+
+    .clear-button {
+      padding: 6px 10px;
+      border: none;
+      background: #f3f4f6;
+      color: #374151;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .clear-button:disabled {
+      color: #9ca3af;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
   <div class="chat-container">
-    <div class="chat-header">我的聊天机器人</div>
+    <div class="chat-header">
+      <div class="chat-title">我的聊天机器人</div>
+      <div class="chat-status">
+        <span class="status-pill loading" id="statusText">正在连接后端...</span>
+        <span class="status-pill" id="modelText">模型：读取中</span>
+        <span class="status-pill" id="promptText">角色：读取中</span>
+      </div>
+    </div>
 
     <div class="chat-box" id="chatBox"></div>
+
+    <div class="chat-actions">
+      <button class="clear-button" id="clearBtn">清空记录</button>
+    </div>
 
     <div class="chat-input">
       <input type="text" id="msgInput" placeholder="请输入内容" />
       <button id="sendBtn">发送</button>
+      <button class="stop-button" id="stopBtn" disabled>停止</button>
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.3/dist/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
   <script>
     const chatBox = document.getElementById("chatBox")
     const msgInput = document.getElementById("msgInput")
     const sendBtn = document.getElementById("sendBtn")
+    const stopBtn = document.getElementById("stopBtn")
+    const clearBtn = document.getElementById("clearBtn")
+    const statusText = document.getElementById("statusText")
+    const modelText = document.getElementById("modelText")
+    const promptText = document.getElementById("promptText")
+    // 这里保存当前页面里的多轮对话。
+    // 页面刷新后会从后端 SQLite 数据库重新读取回来。
+    const chatHistory = []
+    const maxHistoryMessages = 20
+    let currentRequestController = null
+
+    function setStatus(text, type) {
+      statusText.textContent = text
+      statusText.className = `status-pill ${type}`
+    }
+
+    function getRecentMessages() {
+      // 只发送最近 20 条消息，避免上下文太长导致请求变慢、费用变高。
+      return chatHistory.slice(-maxHistoryMessages)
+    }
+
+    function resetChatHistory(messages) {
+      chatHistory.length = 0
+
+      for (const message of messages) {
+        chatHistory.push({
+          role: message.role,
+          content: message.content
+        })
+      }
+    }
+
+    function renderMarkdown(text) {
+      // marked 负责把 Markdown 转成 HTML，DOMPurify 负责清理危险 HTML。
+      const rawHtml = marked.parse(text, {
+        breaks: true
+      })
+
+      return DOMPurify.sanitize(rawHtml)
+    }
+
+    function enhanceCodeBlocks(element) {
+      const codeBlocks = element.querySelectorAll("pre code")
+
+      for (const codeBlock of codeBlocks) {
+        hljs.highlightElement(codeBlock)
+
+        const pre = codeBlock.parentElement
+        if (!pre || pre.querySelector(".copy-code-button")) {
+          continue
+        }
+
+        const copyButton = document.createElement("button")
+        copyButton.className = "copy-code-button"
+        copyButton.type = "button"
+        copyButton.textContent = "复制"
+
+        copyButton.addEventListener("click", async function () {
+          try {
+            await navigator.clipboard.writeText(codeBlock.innerText)
+            copyButton.textContent = "已复制"
+            setTimeout(() => {
+              copyButton.textContent = "复制"
+            }, 1200)
+          } catch (error) {
+            copyButton.textContent = "失败"
+            console.error(error)
+          }
+        })
+
+        pre.appendChild(copyButton)
+      }
+    }
+
+    function renderMessage(element, text, role) {
+      if (role === "bot") {
+        element.innerHTML = renderMarkdown(text)
+        enhanceCodeBlocks(element)
+        return
+      }
+
+      element.textContent = text
+    }
 
     // 新增一条聊天消息，并返回这个 DOM 元素，方便后面继续更新它。
     function addMessage(text, role) {
       const div = document.createElement("div")
       div.className = `message ${role}`
-      div.textContent = text
+      div.dataset.role = role
+      renderMessage(div, text, role)
       chatBox.appendChild(div)
       chatBox.scrollTop = chatBox.scrollHeight
       return div
@@ -115,19 +344,91 @@
 
     // 流式回复时，机器人消息不是一次性定稿的，所以需要原地更新文本。
     function updateMessage(element, text) {
-      element.textContent = text
+      renderMessage(element, text, element.dataset.role)
       chatBox.scrollTop = chatBox.scrollHeight
+    }
+
+    async function saveMessage(role, content) {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          role: role,
+          content: content
+        })
+      })
+
+      if (!res.ok) {
+        throw new Error("保存聊天记录失败")
+      }
+
+      return res.json()
+    }
+
+    async function loadChatHistory() {
+      try {
+        const res = await fetch("/api/messages")
+        if (!res.ok) {
+          throw new Error("读取聊天记录失败")
+        }
+
+        const messages = await res.json()
+        chatBox.innerHTML = ""
+        resetChatHistory(messages)
+
+        for (const message of messages) {
+          addMessage(message.content, message.role === "user" ? "user" : "bot")
+        }
+      } catch (error) {
+        setStatus("读取历史失败", "error")
+        console.error(error)
+      }
+    }
+
+    async function loadServerStatus() {
+      try {
+        const res = await fetch("/api/status")
+        if (!res.ok) {
+          throw new Error("状态接口返回失败")
+        }
+
+        const status = await res.json()
+
+        setStatus(status.apiKeyConfigured ? "后端已连接" : "后端已连接，Key 未配置", status.apiKeyConfigured ? "ok" : "error")
+        modelText.textContent = `模型：${status.model}`
+        promptText.textContent = `角色：${status.systemPrompt}`
+      } catch (error) {
+        setStatus("后端未连接", "error")
+        modelText.textContent = "模型：未知"
+        promptText.textContent = "角色：未知"
+        console.error(error)
+      }
     }
 
     async function sendMessage() {
       const message = msgInput.value.trim()
-      if (!message) return
+      if (!message || currentRequestController) return
 
       addMessage(message, "user")
+      chatHistory.push({
+        role: "user",
+        content: message
+      })
+      saveMessage("user", message).catch((error) => {
+        setStatus("保存用户消息失败", "error")
+        console.error(error)
+      })
       msgInput.value = ""
       sendBtn.disabled = true
+      clearBtn.disabled = true
+      stopBtn.disabled = false
+      setStatus("请求中...", "loading")
       // 先放一个占位消息，后面随着流式数据返回不断把它改成最新内容。
       const botMessage = addMessage("正在思考...", "bot")
+      currentRequestController = new AbortController()
+      let reply = ""
 
       try {
         // 前端不直接请求 DeepSeek，而是先请求自己的后端。
@@ -138,25 +439,27 @@
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            message: message
-          })
+            messages: getRecentMessages()
+          }),
+          signal: currentRequestController.signal
         })
 
         if (!res.ok) {
           const errorText = await res.text()
           updateMessage(botMessage, errorText || "请求失败，请检查后端日志")
+          setStatus("请求失败", "error")
           return
         }
 
         if (!res.body) {
           updateMessage(botMessage, "浏览器没有拿到流式响应")
+          setStatus("请求失败", "error")
           return
         }
 
         // fetch 的响应体本身也是一个流，这里开始逐段读取。
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
-        let reply = ""
 
         while (true) {
           const { done, value } = await reader.read()
@@ -169,17 +472,81 @@
         }
 
         // 流结束后，再做一次最终收尾，防止只剩空白。
-        updateMessage(botMessage, reply.trim() || "模型没有返回内容")
+        const finalReply = reply.trim() || "模型没有返回内容"
+        updateMessage(botMessage, finalReply)
+        chatHistory.push({
+          role: "assistant",
+          content: finalReply
+        })
+        await saveMessage("assistant", finalReply)
+        setStatus("后端已连接", "ok")
       } catch (error) {
+        if (error.name === "AbortError") {
+          const stoppedReply = reply.trim() ? `${reply.trim()}\n\n（已停止生成）` : "已停止生成"
+          updateMessage(botMessage, stoppedReply)
+          setStatus("已停止生成", "error")
+
+          if (reply.trim()) {
+            chatHistory.push({
+              role: "assistant",
+              content: stoppedReply
+            })
+            saveMessage("assistant", stoppedReply).catch((saveError) => {
+              setStatus("保存停止回复失败", "error")
+              console.error(saveError)
+            })
+          }
+
+          return
+        }
+
         updateMessage(botMessage, "请求失败，请检查后端是否启动")
+        setStatus("请求失败", "error")
         console.error(error)
       } finally {
+        currentRequestController = null
         sendBtn.disabled = false
+        clearBtn.disabled = false
+        stopBtn.disabled = true
+        msgInput.focus()
+      }
+    }
+
+    function stopGenerating() {
+      if (!currentRequestController) return
+
+      // 中断当前 fetch，请求会从前端断开，后端也会收到连接关闭信号。
+      currentRequestController.abort()
+    }
+
+    async function clearMessages() {
+      if (currentRequestController) return
+
+      try {
+        clearBtn.disabled = true
+        const res = await fetch("/api/messages", {
+          method: "DELETE"
+        })
+
+        if (!res.ok) {
+          throw new Error("清空聊天记录失败")
+        }
+
+        chatHistory.length = 0
+        chatBox.innerHTML = ""
+        setStatus("聊天记录已清空", "ok")
+      } catch (error) {
+        setStatus("清空记录失败", "error")
+        console.error(error)
+      } finally {
+        clearBtn.disabled = false
         msgInput.focus()
       }
     }
 
     sendBtn.addEventListener("click", sendMessage)
+    stopBtn.addEventListener("click", stopGenerating)
+    clearBtn.addEventListener("click", clearMessages)
 
     msgInput.addEventListener("keydown", function (e) {
       // 按下回车时直接发送，省得每次都点按钮。
@@ -187,6 +554,9 @@
         sendMessage()
       }
     })
+
+    loadServerStatus()
+    loadChatHistory()
   </script>
 </body>
 </html>

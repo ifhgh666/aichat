@@ -2,3 +2,6 @@
 node_modules/
 server.out
 server.err
+data/
+*.db
+.playwright-mcp/
